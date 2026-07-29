@@ -16,7 +16,7 @@ st.set_page_config(
 
 # DATA LAYER
 
-CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "timetable_data.csv")
+CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "timetable_data(4).csv")
 
 DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 REQUIRED_COLS = ["professor", "day", "time_slot", "division", "subject", "room", "type"]
