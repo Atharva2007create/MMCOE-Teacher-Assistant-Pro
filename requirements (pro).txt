@@ -1,0 +1,5 @@
+# MMCOE Teacher Assistant
+# Install: pip install -r "requirements (1).txt"
+
+streamlit>=1.30.0
+pandas>=2.0.0
