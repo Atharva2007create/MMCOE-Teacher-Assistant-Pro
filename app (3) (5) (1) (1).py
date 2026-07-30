@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import re
+import uuid
 
 # ═════════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -64,8 +65,35 @@ DATA_OK = not df.empty
 
 if DATA_OK:
     all_professors = sorted(df["professor"].unique().tolist())
+    all_divisions = sorted(df["division"].unique().tolist())
+    ALL_ROOMS = sorted(df["room"].unique().tolist())
 else:
     all_professors = []
+    all_divisions = []
+    ALL_ROOMS = []
+
+
+def _build_time_options(schedule_df: pd.DataFrame):
+    """Build start/end time dropdown options strictly from the CSV's existing time_slot values.
+
+    Only start/end combinations that actually occur together in the timetable are
+    offered, so a chosen (start, end) pair always matches a real period.
+    """
+    pairs = []
+    for slot in schedule_df["time_slot"].unique():
+        if " - " in slot:
+            start, end = slot.split(" - ", 1)
+            pairs.append((start.strip(), end.strip()))
+
+    starts = sorted({s for s, _ in pairs}, key=_time_sort_key)
+    ends_by_start = {}
+    for s, e in pairs:
+        ends_by_start.setdefault(s, set()).add(e)
+    ends_by_start = {s: sorted(ends, key=_time_sort_key) for s, ends in ends_by_start.items()}
+    return starts, ends_by_start
+
+
+START_TIMES, START_TO_ENDS = _build_time_options(df) if DATA_OK else ([], {})
 
 
 def escape_html(text: str) -> str:
@@ -114,6 +142,24 @@ def _get_professor_schedule(prof: str) -> dict:
             schedule[day] = day_sessions.to_dict('records')
     
     return schedule
+
+
+def _get_custom_schedules_for(prof: str, day: str) -> list:
+    """Returns professor-added extra lectures for a given day, sorted by start time."""
+    entries = [
+        c for c in st.session_state.get("custom_schedules", [])
+        if c["professor"] == prof and c["day"] == day
+    ]
+    return sorted(entries, key=lambda c: _time_sort_key(c["time_slot"]))
+
+
+def _get_vacant_rooms(day: str, time_slot: str) -> list:
+    """Returns rooms not already booked (in the CSV or in added schedules) for this day/time_slot."""
+    occupied = set(df[(df["day"] == day) & (df["time_slot"] == time_slot)]["room"].tolist())
+    for entry in st.session_state.get("custom_schedules", []):
+        if entry["day"] == day and entry["time_slot"] == time_slot:
+            occupied.add(entry["room"])
+    return [r for r in ALL_ROOMS if r not in occupied]
 
 
 def classify(ltype: str):
@@ -915,6 +961,8 @@ if "selected_session_index" not in st.session_state:
     st.session_state["selected_session_index"] = None
 if "assignments" not in st.session_state:
     st.session_state["assignments"] = []
+if "custom_schedules" not in st.session_state:
+    st.session_state["custom_schedules"] = []
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1162,6 +1210,114 @@ else:
                     # Hidden button to trigger session selection
                     if st.button("View Details", key=f"btn_{session_key}", help="Click to see full details"):
                         st.session_state["selected_session_index"] = session_key
+                        st.rerun()
+            
+            # ════════════════════════════════════════════════════════════
+            # PROFESSOR-ADDED EXTRA SCHEDULES FOR THIS DAY
+            # ════════════════════════════════════════════════════════════
+            day_custom_schedules = _get_custom_schedules_for(selected_prof, day)
+            
+            for entry in day_custom_schedules:
+                chip_cls, card_cls, chip_label = classify(entry["type"])
+                
+                st.markdown(f"""
+                <div class="brief-card {card_cls}">
+                  <div class="brief-top">
+                    <span class="brief-chip {chip_cls}">{chip_label}</span>
+                  </div>
+                  <div class="brief-subject">{escape_html(entry['subject'])}</div>
+                  <div class="brief-meta">
+                    <div class="brief-meta-item">🕐 {escape_html(entry['time_slot'])}</div>
+                    <div class="brief-meta-item">📍 {escape_html(entry['room'])}</div>
+                    <div class="brief-meta-item">👥 {escape_html(entry['division'])}</div>
+                  </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button("🗑️ Remove assigned lecture", key=f"remove_custom_{entry['id']}", help="Remove this added lecture"):
+                    st.session_state["custom_schedules"] = [
+                        c for c in st.session_state["custom_schedules"] if c["id"] != entry["id"]
+                    ]
+                    st.warning(f"❌ Removed '{escape_html(entry['subject'])}' from {escape_html(day)}.")
+                    st.rerun()
+            
+            # ════════════════════════════════════════════════════════════
+            # ADD A SCHEDULE
+            # ════════════════════════════════════════════════════════════
+            with st.expander("➕ Add a schedule", expanded=False, key=f"add_schedule_expander_{day}"):
+                lecture_name = st.text_input(
+                    "Lecture name",
+                    key=f"add_name_{day}",
+                    placeholder="e.g. Extra Doubt Session",
+                )
+                
+                col_a, col_b = st.columns(2, gap="small")
+                with col_a:
+                    start_choice = st.selectbox(
+                        "Start time",
+                        options=START_TIMES,
+                        key=f"add_start_{day}",
+                        index=None,
+                        placeholder="Select start time",
+                    )
+                with col_b:
+                    end_options = START_TO_ENDS.get(start_choice, []) if start_choice else []
+                    end_choice = st.selectbox(
+                        "End time",
+                        options=end_options,
+                        key=f"add_end_{day}",
+                        index=None,
+                        placeholder="Select end time" if start_choice else "Select start time first",
+                        disabled=not start_choice,
+                    )
+                
+                division_choice = st.selectbox(
+                    "Division",
+                    options=all_divisions,
+                    key=f"add_division_{day}",
+                    index=None,
+                    placeholder="Select division",
+                )
+                
+                if start_choice and end_choice:
+                    candidate_slot = f"{start_choice} - {end_choice}"
+                    vacant_rooms = _get_vacant_rooms(day, candidate_slot)
+                else:
+                    vacant_rooms = []
+                
+                room_choice = st.selectbox(
+                    "Lab / Room",
+                    options=vacant_rooms,
+                    key=f"add_room_{day}",
+                    index=None,
+                    placeholder=(
+                        "Select start & end time first" if not (start_choice and end_choice)
+                        else ("No rooms vacant at this time" if not vacant_rooms else "Select a room")
+                    ),
+                    disabled=(not (start_choice and end_choice)) or (not vacant_rooms),
+                )
+                
+                if st.button("Add schedule", key=f"add_submit_{day}", use_container_width=True):
+                    if not lecture_name or not lecture_name.strip():
+                        st.warning("Please enter a lecture name.")
+                    elif not (start_choice and end_choice):
+                        st.warning("Please select both start and end time.")
+                    elif not division_choice:
+                        st.warning("Please select a division.")
+                    elif not room_choice:
+                        st.warning("Please select a vacant room.")
+                    else:
+                        st.session_state["custom_schedules"].append({
+                            "id": uuid.uuid4().hex,
+                            "professor": selected_prof,
+                            "day": day,
+                            "time_slot": f"{start_choice} - {end_choice}",
+                            "division": division_choice,
+                            "subject": lecture_name.strip(),
+                            "room": room_choice,
+                            "type": "Extra",
+                        })
+                        st.success(f"✅ Added '{escape_html(lecture_name.strip())}' on {escape_html(day)}.")
                         st.rerun()
             
             st.markdown("</div>", unsafe_allow_html=True)
