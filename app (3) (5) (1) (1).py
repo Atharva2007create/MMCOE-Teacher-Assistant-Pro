@@ -23,6 +23,8 @@ DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 REQUIRED_COLS = ["professor", "day", "time_slot", "division", "subject", "room", "type"]
 
 PLACEHOLDER_PROF = "Select professor"
+PLACEHOLDER_DIV = "Select division"
+PROFESSOR_PASSWORD = "Ronaldo@Messi2026"
 
 
 def _time_sort_key(t: str):
@@ -160,6 +162,23 @@ def _get_vacant_rooms(day: str, time_slot: str) -> list:
         if entry["day"] == day and entry["time_slot"] == time_slot:
             occupied.add(entry["room"])
     return [r for r in ALL_ROOMS if r not in occupied]
+
+
+def _get_division_schedule(division: str) -> dict:
+    """Returns the official CSV timetable for a division, grouped by day and sorted by time."""
+    if not division or division == PLACEHOLDER_DIV:
+        return {day: [] for day in DAY_ORDER}
+
+    div_data = df[df["division"] == division]
+    schedule = {day: [] for day in DAY_ORDER}
+
+    for day in DAY_ORDER:
+        day_sessions = div_data[div_data["day"] == day]
+        if not day_sessions.empty:
+            day_sessions = day_sessions.sort_values("time_slot", key=lambda x: x.apply(_time_sort_key))
+            schedule[day] = day_sessions.to_dict('records')
+
+    return schedule
 
 
 def classify(ltype: str):
@@ -853,6 +872,51 @@ div[data-testid="stAlert"] { border-radius: 12px !important; }
         transition-duration: 0.01ms !important;
     }
 }
+
+/* ── Role selection (landing screen) ── */
+.role-question {
+    font-family: 'Fraunces', serif;
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--maroon-900);
+    text-align: center;
+    margin: 1.5rem 0 1.5rem 0;
+}
+.role-card {
+    background: var(--white);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    box-shadow: 0 16px 40px -24px rgba(43,7,7,0.35);
+    padding: 2.5rem 1.5rem;
+    text-align: center;
+    aspect-ratio: 1 / 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    margin-bottom: 0.85rem;
+    transition: transform 0.2s var(--ease-smooth), box-shadow 0.2s var(--ease-smooth);
+}
+.role-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 20px 48px -24px rgba(43,7,7,0.45);
+}
+.role-card-icon { font-size: 3rem; }
+.role-card-title {
+    font-family: 'Fraunces', serif;
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--maroon-900);
+}
+.role-card-desc {
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+    line-height: 1.5;
+}
+@media (max-width: 480px) {
+    .role-card { aspect-ratio: auto; padding: 1.75rem 1.25rem; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -963,6 +1027,210 @@ if "assignments" not in st.session_state:
     st.session_state["assignments"] = []
 if "custom_schedules" not in st.session_state:
     st.session_state["custom_schedules"] = []
+if "user_role" not in st.session_state:
+    st.session_state["user_role"] = None
+if "professor_authenticated" not in st.session_state:
+    st.session_state["professor_authenticated"] = False
+
+
+# ════════════════════════════════════════════════════════════════
+# ROLE SELECTION (landing screen)
+# ════════════════════════════════════════════════════════════════
+if st.session_state["user_role"] is None:
+    st.markdown('<div class="role-question">What describes you?</div>', unsafe_allow_html=True)
+
+    role_col1, role_col2 = st.columns(2, gap="large")
+
+    with role_col1:
+        st.markdown("""
+        <div class="role-card">
+          <div class="role-card-icon">🎓</div>
+          <div class="role-card-title">Student</div>
+          <div class="role-card-desc">View your division's weekly timetable</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("Continue as Student", key="role_select_student", use_container_width=True):
+            st.session_state["user_role"] = "student"
+            st.rerun()
+
+    with role_col2:
+        st.markdown("""
+        <div class="role-card">
+          <div class="role-card-icon">🧑‍🏫</div>
+          <div class="role-card-title">Professor</div>
+          <div class="role-card-desc">Manage your teaching schedule</div>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("Continue as Professor", key="role_select_professor", use_container_width=True):
+            st.session_state["user_role"] = "professor"
+            st.rerun()
+
+    st.stop()
+
+
+# ════════════════════════════════════════════════════════════════
+# STUDENT SECTION
+# ════════════════════════════════════════════════════════════════
+if st.session_state["user_role"] == "student":
+    if st.button("⬅ Change role", key="student_back_to_role"):
+        st.session_state["user_role"] = None
+        st.rerun()
+
+    division_options = [PLACEHOLDER_DIV] + all_divisions
+    selected_division = st.session_state.get("student_division", PLACEHOLDER_DIV)
+
+    with st.container(border=True):
+        st.markdown("""
+        <div class="panel-head">
+          <div class="panel-title">Select Division</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        div_col1, _ = st.columns([2, 3], gap="small")
+
+        with div_col1:
+            division_filled = " filled" if selected_division != PLACEHOLDER_DIV else ""
+            st.markdown(f'<div class="field-label{division_filled}">Division</div>', unsafe_allow_html=True)
+            selected_division = st.selectbox(
+                "Division",
+                options=division_options,
+                label_visibility="collapsed",
+                key="student_division",
+            )
+
+    if selected_division == PLACEHOLDER_DIV:
+        st.markdown("""
+        <div class="empty-box">
+          <div class="empty-title">Welcome, Student!</div>
+          <div class="empty-sub">
+            Select your division from above to view your complete weekly schedule.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        division_schedule = _get_division_schedule(selected_division)
+
+        st.markdown(f"""
+        <div style="margin: 1.5rem 0; padding: 1rem; background: #FFFBFB; border-left: 4px solid var(--crimson-2); border-radius: 8px;">
+          <div style="font-family: 'Fraunces', serif; font-size: 1.15rem; font-weight: 600; color: var(--maroon-900);">
+            📅 Weekly Timetable for Division <span style="color: var(--crimson-2);">{escape_html(selected_division)}</span>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        day_emojis = {
+            "Monday": "🌅",
+            "Tuesday": "☀️",
+            "Wednesday": "🌤️",
+            "Thursday": "⛅",
+            "Friday": "🌆"
+        }
+
+        for day in DAY_ORDER:
+            day_sessions = division_schedule[day]
+            emoji = day_emojis.get(day, "📅")
+
+            st.markdown(f"""
+            <div class="day-section">
+              <div class="day-header">
+                <span class="day-emoji">{emoji}</span>
+                <span class="day-title">{day}</span>
+                <span class="day-count">{len(day_sessions)} session{"s" if len(day_sessions) != 1 else ""}</span>
+              </div>
+            """, unsafe_allow_html=True)
+
+            if not day_sessions:
+                st.markdown(f"""
+                <div class="no-schedule">
+                  No schedule on {day}
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                with st.expander("🔍 Click to see detailed schedule", expanded=False, key=f"student_day_expander_{day}"):
+                    for session in day_sessions:
+                        chip_cls, card_cls, chip_label = classify(session["type"])
+
+                        st.markdown(f"""
+                        <div class="detailed-card {card_cls}">
+                          <div class="detailed-top">
+                            <span class="detailed-chip {chip_cls}">{chip_label}</span>
+                          </div>
+                          <div class="detailed-subject">{escape_html(session['subject'])}</div>
+                          <div class="detailed-meta">
+                            <div>
+                              <div class="meta-label">Time</div>
+                              <div class="meta-value">{escape_html(session['time_slot'])}</div>
+                            </div>
+                            <div>
+                              <div class="meta-label">Room</div>
+                              <div class="meta-value">{escape_html(session['room'])}</div>
+                            </div>
+                            <div>
+                              <div class="meta-label">Professor</div>
+                              <div class="meta-value">{escape_html(session['professor'])}</div>
+                            </div>
+                            <div>
+                              <div class="meta-label">Type</div>
+                              <div class="meta-value">{chip_label}</div>
+                            </div>
+                          </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="soft-divider"></div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="footer">
+      <div class="footer-line1">MMCOE Teacher Assistant — Engineering Science & Humanities</div>
+      <div class="footer-line2">Marathwada Mitra Mandal's College of Engineering, Pune · A.Y. 2025–26</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.stop()
+
+
+# ════════════════════════════════════════════════════════════════
+# PROFESSOR SECTION — PASSWORD GATE
+# ════════════════════════════════════════════════════════════════
+if not st.session_state["professor_authenticated"]:
+    if st.button("⬅ Change role", key="professor_back_to_role"):
+        st.session_state["user_role"] = None
+        st.rerun()
+
+    with st.container(border=True):
+        st.markdown("""
+        <div class="panel-head">
+          <div class="panel-title">Professor Login</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        pwd_col, _ = st.columns([2, 3], gap="small")
+
+        with pwd_col:
+            st.markdown('<div class="field-label">Password</div>', unsafe_allow_html=True)
+            entered_password = st.text_input(
+                "Password",
+                type="password",
+                label_visibility="collapsed",
+                key="professor_password_input",
+            )
+            if st.button("Login", key="professor_login_submit", use_container_width=True):
+                if entered_password == PROFESSOR_PASSWORD:
+                    st.session_state["professor_authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("❌ Incorrect password. Access denied.")
+
+    st.markdown('<div class="soft-divider"></div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="footer">
+      <div class="footer-line1">MMCOE Teacher Assistant — Engineering Science & Humanities</div>
+      <div class="footer-line2">Marathwada Mitra Mandal's College of Engineering, Pune · A.Y. 2025–26</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.stop()
 
 
 # ════════════════════════════════════════════════════════════════
